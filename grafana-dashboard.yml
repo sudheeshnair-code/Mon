@@ -1,0 +1,22 @@
+# apiVersion: 1
+
+# providers:
+# - name: Linux Dashboard
+#   folder: ""
+#   type: file
+
+#   options:
+#     path: /var/lib/grafana/dashboards
+apiVersion: 1
+
+providers:
+  - name: default
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    editable: true
+    updateIntervalSeconds: 10
+
+    options:
+      path: /var/lib/grafana/dashboards

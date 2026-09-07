@@ -1,0 +1,134 @@
+---
+- name: Install and Configure Prometheus & Grafana
+  hosts: test_server
+  become: yes
+  gather_facts: no
+
+  tasks:
+
+  - name: Create Grafana configuration directories
+    file:
+      path: "{{ item }}"
+      state: directory
+      owner: grafana
+      group: grafana
+      mode: "0755"
+    loop:
+      - /etc/grafana
+      - /etc/grafana/provisioning
+      - /etc/grafana/provisioning/dashboards
+      - /etc/grafana/provisioning/datasources
+      - /var/lib/grafana
+      - /var/lib/grafana/dashboards
+      - /var/log/grafana
+ ###############################################################
+# Dashboard Provisioning
+###############################################################
+
+#   - name: Create Dashboard Directory
+#     file:
+#       path: /var/lib/grafana/dashboards
+#       state: directory
+
+#   - name: Copy Dashboard
+#     copy:
+#       src: AAP Server Basic Metrics Dashboard-1785924951612.json.j2
+#       dest: /var/lib/grafana/dashboards/linux.json
+#       # dest: /opt/grafana/conf/provisioning/datasources/prometheus.yml
+
+#   - name: Copy Dashboard Provider
+#     copy:
+#       src: grafana-dashboard.yml
+#       dest: /etc/grafana/provisioning/dashboards/dashboard.yml
+#       # dest: /opt/grafana/conf/provisioning/dashboards/dashboard.yml
+
+# ###############################################################
+# # Datasource Provisioning
+# ###############################################################
+
+#   - name: Create Datasource
+#     copy:
+#       dest: /etc/grafana/provisioning/datasources/prometheus.yml
+#       content: |
+#         apiVersion: 1
+
+#         datasources:
+#         - name: Prometheus
+#           type: prometheus
+#           access: proxy
+#           url: http://localhost:9090
+#           isDefault: true
+
+  ###############################################################
+# Dashboard Provisioning
+###############################################################
+
+  - name: Create Dashboard Directory
+    file:
+      path: /var/lib/grafana/dashboards
+      state: directory
+      owner: grafana
+      group: grafana
+      mode: "0755"
+  
+  - name: Copy Dashboard JSON
+    template:
+      src: template/grafana-dashboard.json.j2
+      dest: /var/lib/grafana/dashboards/linux.json
+      owner: grafana
+      group: grafana
+      mode: "0644"
+  
+  - name: Copy Dashboard Provider
+    copy:
+      src: grafana-dashboard.yml
+      dest: /opt/grafana/conf/provisioning/dashboards/dashboard.yml
+      owner: grafana
+      group: grafana
+      mode: "0644"
+  
+  ###############################################################
+  # Datasource Provisioning
+  ###############################################################
+  
+  - name: Create Prometheus Datasource
+    copy:
+      dest: /opt/grafana/conf/provisioning/datasources/prometheus.yml
+      owner: grafana
+      group: grafana
+      mode: "0644"
+      content: |
+        apiVersion: 1
+    
+        datasources:
+          - name: Prometheus
+            type: prometheus
+            access: proxy
+            url: http://localhost:9090
+            isDefault: true
+  
+  - name: Reload systemd
+    systemd:
+      daemon_reload: yes
+  
+  ###############################################################
+  # Start Services
+  ###############################################################
+  
+  - name: Start Prometheus
+    service:
+      name: prometheus
+      state: started
+      enabled: yes
+  
+  - name: Start Node Exporter
+    service:
+      name: node_exporter
+      state: started
+      enabled: yes
+  
+  - name: Start Grafana
+    service:
+      name: grafana-server
+      state: started
+      enabled: yes

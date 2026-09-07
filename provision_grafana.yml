@@ -1,0 +1,190 @@
+---
+- name: Install and Configure Grafanas
+  hosts: test_server
+  # become: true
+  gather_facts: true
+
+  vars:
+    grafana_version: "13.1.1"
+
+  tasks:
+
+    ###############################################################
+    # Verify systemd
+    ###############################################################
+
+    - name: Verify systemd is available
+      ansible.builtin.command:
+        cmd: systemctl show --property=Version
+      changed_when: false
+
+    ###############################################################
+    # Install required packages
+    ###############################################################
+
+    - name: Install required packages
+      ansible.builtin.dnf:
+        name:
+          - wget
+          - curl
+          - tar
+        state: present
+        enablerepo:
+          - baseos
+          - appstream
+        disablerepo:
+          - "*"
+
+    ###############################################################
+    # Create Grafana user
+    ###############################################################
+
+    - name: Create Grafana user
+      ansible.builtin.user:
+        name: grafana
+        shell: /sbin/nologin
+        create_home: false
+
+    ###############################################################
+    # Download Grafana
+    ###############################################################
+
+    # - name: Download Grafana
+    #   ansible.builtin.get_url:
+    #     url: "https://dl.grafana.com/oss/release/grafana-{{ grafana_version }}.linux-amd64.tar.gz"
+    #     dest: /tmp/grafana.tar.gz
+    #     mode: "0644"
+    
+    - name: Copy Grafana archive to destination
+      ansible.builtin.copy:
+        src: /runner/artifacts/monitoring/grafana.tar.gz
+        dest: /tmp/
+        mode: "0644"
+
+    ###############################################################
+    # Extract Grafana
+    ###############################################################
+
+    - name: Extract Grafana
+      ansible.builtin.unarchive:
+        src: /tmp/grafana.tar.gz
+        dest: /opt/
+        remote_src: true
+
+    ###############################################################
+    # Rename Grafana directory
+    ###############################################################
+
+    - name: Rename Grafana directory
+      ansible.builtin.command:
+        cmd: "mv /opt/grafana-{{ grafana_version }} /opt/grafana"
+        creates: /opt/grafana
+
+    ###############################################################
+    # Create directories
+    ###############################################################
+
+    - name: Create Grafana directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: grafana
+        group: grafana
+        mode: "0755"
+      loop:
+        - /etc/grafana
+        - /var/lib/grafana
+        - /var/log/grafana
+
+    ###############################################################
+    # Set Grafana ownership
+    ###############################################################
+
+    - name: Set Grafana installation ownership
+      ansible.builtin.file:
+        path: /opt/grafana
+        owner: grafana
+        group: grafana
+        recurse: true
+
+    ###############################################################
+    # Deploy Grafana configuration
+    ###############################################################
+
+    - name: Deploy grafana.ini
+      ansible.builtin.template:
+        src: template/grafana.ini.j2
+        dest: /etc/grafana/grafana.ini
+        owner: grafana
+        group: grafana
+        mode: "0644"
+
+    ###############################################################
+    # Create Grafana systemd service
+    ###############################################################
+
+    - name: Create Grafana systemd service
+      ansible.builtin.template:
+        src: template/grafana.service.j2
+        dest: /etc/systemd/system/grafana-server.service
+        owner: root
+        group: root
+        mode: "0644"
+
+    ###############################################################
+    # Reload systemd
+    ###############################################################
+
+    - name: Reload systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    ###############################################################
+    # Enable and start Grafana
+    ###############################################################
+
+    - name: Enable and start Grafana
+      ansible.builtin.systemd_service:
+        name: grafana-server.service
+        enabled: true
+        state: started
+
+    ###############################################################
+    # Remove archive
+    ###############################################################
+
+    - name: Remove Grafana archive
+      ansible.builtin.file:
+        path: /tmp/grafana.tar.gz
+        state: absent
+
+    ###############################################################
+    # Verify
+    ###############################################################
+
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+
+    - name: Verify Grafana
+      ansible.builtin.assert:
+        that:
+          - "'grafana-server.service' in ansible_facts.services"
+          - ansible_facts.services['grafana-server.service'].state == 'running'
+          - ansible_facts.services['grafana-server.service'].status == 'enabled'
+        fail_msg: "Grafana is not running or enabled."
+        success_msg: "Grafana is installed, enabled and running."
+
+    ###############################################################
+    # Summary
+    ###############################################################
+
+    - name: Grafana installation summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - " Grafana Installation Successful"
+          - "=========================================="
+          - "Version : {{ grafana_version }}"
+          - "Service : grafana-server.service"
+          - "Port    : 3000"
+          - "Status  : Running"

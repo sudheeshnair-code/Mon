@@ -1,0 +1,243 @@
+---
+- name: Deprovision Grafana
+  hosts: 192.168.1.156
+  become: true
+  gather_facts: true
+
+  vars:
+    grafana_version: "13.1.1"
+
+  tasks:
+
+    ###############################################################
+    # Verify systemd
+    ###############################################################
+
+    - name: Check whether systemd is available
+      ansible.builtin.command:
+        cmd: systemctl show --property=Version
+      register: systemd_check
+      changed_when: false
+      failed_when: false
+
+    - name: Stop deprovision if systemd is unavailable
+      ansible.builtin.fail:
+        msg: >-
+          systemd is not available on {{ inventory_hostname }}.
+          Grafana will NOT be removed because it may still be running.
+      when: systemd_check.rc != 0
+
+    ###############################################################
+    # Gather service facts
+    ###############################################################
+
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+
+    ###############################################################
+    # Check Grafana service
+    ###############################################################
+
+    - name: Check whether Grafana service exists
+      ansible.builtin.set_fact:
+        grafana_service_exists: >-
+          {{ 'grafana-server.service' in ansible_facts.services }}
+
+    - name: Display Grafana service status
+      ansible.builtin.debug:
+        msg: >-
+          Grafana service exists:
+          {{ grafana_service_exists }}
+
+    ###############################################################
+    # Stop Grafana
+    ###############################################################
+
+    - name: Stop Grafana
+      ansible.builtin.systemd_service:
+        name: grafana-server.service
+        state: stopped
+      when: grafana_service_exists
+
+    ###############################################################
+    # Disable Grafana
+    ###############################################################
+
+    - name: Disable Grafana
+      ansible.builtin.systemd_service:
+        name: grafana-server.service
+        enabled: false
+      when: grafana_service_exists
+
+    ###############################################################
+    # Remove Grafana systemd service
+    ###############################################################
+
+    - name: Remove Grafana systemd service
+      ansible.builtin.file:
+        path: /etc/systemd/system/grafana-server.service
+        state: absent
+
+    ###############################################################
+    # Reload systemd
+    ###############################################################
+
+    - name: Reload systemd after service removal
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    ###############################################################
+    # Verify Grafana process has stopped
+    ###############################################################
+
+    - name: Check Grafana process
+      ansible.builtin.shell:
+        cmd: pgrep -a grafana
+      register: grafana_process
+      changed_when: false
+      failed_when: false
+
+    - name: Stop cleanup if Grafana is still running
+      ansible.builtin.fail:
+        msg: >-
+          Grafana process is still running after stopping the systemd service.
+
+          Process information:
+          {{ grafana_process.stdout }}
+      when: grafana_process.rc == 0
+
+    ###############################################################
+    # Remove Grafana installation
+    ###############################################################
+
+    - name: Remove Grafana installation
+      ansible.builtin.file:
+        path: /opt/grafana
+        state: absent
+
+    ###############################################################
+    # Remove Grafana configuration
+    ###############################################################
+
+    - name: Remove Grafana configuration
+      ansible.builtin.file:
+        path: /etc/grafana
+        state: absent
+
+    ###############################################################
+    # Remove Grafana data
+    ###############################################################
+
+    - name: Remove Grafana data
+      ansible.builtin.file:
+        path: /var/lib/grafana
+        state: absent
+
+    ###############################################################
+    # Remove Grafana logs
+    ###############################################################
+
+    - name: Remove Grafana logs
+      ansible.builtin.file:
+        path: /var/log/grafana
+        state: absent
+
+    ###############################################################
+    # Remove Grafana temporary archive
+    ###############################################################
+
+    - name: Remove Grafana archive
+      ansible.builtin.file:
+        path: /tmp/grafana.tar.gz
+        state: absent
+
+    ###############################################################
+    # Remove Grafana user
+    ###############################################################
+
+    - name: Check whether Grafana user exists
+      ansible.builtin.getent:
+        database: passwd
+        key: grafana
+      register: grafana_user
+      failed_when: false
+
+    - name: Remove Grafana user
+      ansible.builtin.user:
+        name: grafana
+        state: absent
+        remove: true
+      when: grafana_user.ansible_facts.getent_passwd is defined
+
+    ###############################################################
+    # Final systemd reload
+    ###############################################################
+
+    - name: Final systemd daemon reload
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    ###############################################################
+    # Final service verification
+    ###############################################################
+
+    - name: Gather service facts after removal
+      ansible.builtin.service_facts:
+
+    - name: Verify Grafana service is removed
+      ansible.builtin.assert:
+        that:
+          - "'grafana-server.service' not in ansible_facts.services"
+        fail_msg: "Grafana service is still registered with systemd."
+        success_msg: "Grafana systemd service has been removed."
+
+    ###############################################################
+    # Verify Grafana installation paths
+    ###############################################################
+
+    - name: Check Grafana paths
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /opt/grafana
+        - /etc/grafana
+        - /var/lib/grafana
+        - /var/log/grafana
+        - /etc/systemd/system/grafana-server.service
+        - /tmp/grafana.tar.gz
+      register: grafana_paths
+
+    - name: Display Grafana path verification
+      ansible.builtin.debug:
+        msg: "{{ item.item }} exists={{ item.stat.exists }}"
+      loop: "{{ grafana_paths.results }}"
+
+    ###############################################################
+    # Final process verification
+    ###############################################################
+
+    - name: Final Grafana process check
+      ansible.builtin.shell:
+        cmd: pgrep -a grafana
+      register: final_grafana_process
+      changed_when: false
+      failed_when: false
+
+    ###############################################################
+    # Summary
+    ###############################################################
+
+    - name: Grafana deprovision summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - " Grafana Deprovision Successful"
+          - "=========================================="
+          - "Service removed : grafana-server.service"
+          - "Installation removed : /opt/grafana"
+          - "Configuration removed : /etc/grafana"
+          - "Data removed : /var/lib/grafana"
+          - "Logs removed : /var/log/grafana"
+          - "Archive removed : /tmp/grafana.tar.gz"
+          - "User removed : grafana"
+          - "Process running : {{ 'YES' if final_grafana_process.rc == 0 else 'NO' }}"

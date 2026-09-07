@@ -1,0 +1,315 @@
+---
+- name: Install and Configure Prometheus & Grafanas
+  hosts: localhost
+  gather_facts: no
+  become: yes
+
+  vars:
+    prometheus_version: "2.55.0"
+    node_exporter_version: "1.8.2"
+
+  tasks:
+
+###############################################################
+# Install Packages
+###############################################################
+
+  - name: Install packages
+    yum:
+      name:
+        - wget
+        - curl
+        - tar
+        - unzip
+      state: present
+      enablerepo:
+        - baseos
+        - appstream
+      disablerepo:
+        - "*"
+
+###############################################################
+# Create Users
+###############################################################
+
+  - name: Create Prometheus user
+    user:
+      name: prometheus
+      shell: /sbin/nologin
+      create_home: no
+
+  - name: Create Node Exporter user
+    user:
+      name: node_exporter
+      shell: /sbin/nologin
+      create_home: no
+
+###############################################################
+# Download Prometheus
+###############################################################
+
+  - name: Download Prometheus
+    get_url:
+      url: "https://github.com/prometheus/prometheus/releases/download/v{{ prometheus_version }}/prometheus-{{ prometheus_version }}.linux-amd64.tar.gz"
+      dest: /tmp/prometheus.tar.gz
+
+  - name: Extract Prometheus
+    unarchive:
+      src: /tmp/prometheus.tar.gz
+      dest: /opt/
+      remote_src: yes
+
+  - name: Create symlink
+    file:
+      src: "/opt/prometheus-{{ prometheus_version }}.linux-amd64"
+      dest: /opt/prometheus
+      state: link
+
+###############################################################
+# Download Node Exporter
+###############################################################
+
+  - name: Download Node Exporter
+    get_url:
+      url: "https://github.com/prometheus/node_exporter/releases/download/v{{ node_exporter_version }}/node_exporter-{{ node_exporter_version }}.linux-amd64.tar.gz"
+      dest: /tmp/node_exporter.tar.gz
+
+  - name: Extract Node Exporter
+    unarchive:
+      src: /tmp/node_exporter.tar.gz
+      dest: /opt/
+      remote_src: yes
+
+###############################################################
+# Copy Prometheus Config
+###############################################################
+
+  - name: Copy prometheus.yml
+    template:
+      src: template/prometheus.yml.j2
+      dest: /opt/prometheus/prometheus.yml
+
+#Configure Prometheus
+  - name: Create Prometheus data directory
+    file:
+      path: /var/lib/prometheus
+      state: directory
+      owner: prometheus
+      group: prometheus
+      mode: '0755'
+
+  - name: Set ownership of Prometheus installation
+    file:
+      path: /opt/prometheus
+      state: directory
+      owner: prometheus
+      group: prometheus
+      recurse: yes
+
+###############################################################
+# Install Systemd Service
+###############################################################
+
+  - name: Create Prometheus service
+    copy:
+      dest: /etc/systemd/system/prometheus.service
+      content: |
+        [Unit]
+        Description=Prometheus
+        After=network.target
+  
+        [Service]
+        User=prometheus
+        Group=prometheus
+        Type=simple
+        ExecStart=/opt/prometheus/prometheus \
+          --config.file=/opt/prometheus/prometheus.yml \
+          --storage.tsdb.path=/var/lib/prometheus
+        Restart=always
+  
+        [Install]
+        WantedBy=multi-user.target
+
+  - name: Reload systemd
+    systemd:
+      daemon_reload: yes
+  
+  - name: Enable and start Prometheus
+    systemd:
+      name: prometheus
+      enabled: yes
+      state: started
+###############################################################
+# Node Exporter Service
+###############################################################
+
+  - name: Create Node Exporter Service
+    copy:
+      dest: /etc/systemd/system/node_exporter.service
+      content: |
+        [Unit]
+        Description=Prometheus Node Exporter
+        After=network.target
+        
+        [Service]
+        User=node_exporter
+        Group=node_exporter
+        Type=simple
+        ExecStart=/opt/node_exporter-1.8.2.linux-amd64/node_exporter
+        
+        Restart=always
+        
+        [Install]
+        WantedBy=multi-user.target
+
+  - name: Reload systemd
+    systemd:
+      daemon_reload: yes
+
+  - name: Enable and start Node Exporter
+    systemd:
+      name: node_exporter
+      enabled: true
+      state: started
+###############################################################
+# Install Grafana
+###############################################################
+  - name: Download Grafana
+    get_url:
+      url: "https://dl.grafana.com/oss/release/grafana-13.1.1.linux-amd64.tar.gz"
+      dest: /tmp/grafana.tar.gz
+      mode: "0644"
+
+  - name: Extract Grafana
+    unarchive:
+      src: /tmp/grafana.tar.gz
+      dest: /opt/
+      remote_src: yes
+
+  - name: Rename Grafana directory
+    command: mv /opt/grafana-13.1.1 /opt/grafana
+    args:
+      creates: /opt/grafana
+
+  - name: Create Grafana directories
+    file:
+      path: "{{ item }}"
+      state: directory
+      owner: grafana
+      group: grafana
+      mode: "0755"
+    loop:
+      - /etc/grafana
+      - /var/lib/grafana
+      - /var/log/grafana
+
+  - name: Deploy grafana.ini
+    template:
+      src: template/grafana.ini.j2
+      dest: /etc/grafana/grafana.ini
+      owner: grafana
+      group: grafana
+      mode: "0644"
+
+  - name: Deploy Grafana systemd service
+    template:
+      src: template/grafana.service.j2
+      dest: /etc/systemd/system/grafana-server.service
+      mode: "0644"
+
+  - name: Reload systemd
+    systemd:
+      daemon_reload: yes
+
+  - name: Enable and start Grafana
+    systemd:
+      name: grafana-server
+      enabled: yes
+      state: started
+
+  # - name: Add Grafana RPM repository
+  #   yum_repository:
+  #     name: grafana
+  #     description: Grafana OSS Repository
+  #     baseurl: https://rpm.grafana.com
+  #     enabled: yes
+  #     gpgcheck: yes
+  #     gpgkey: https://rpm.grafana.com/gpg.key
+
+  # - name: Refresh DNF cache
+  #   dnf:
+  #     update_cache: yes
+
+  # - name: Install Grafana
+  #   dnf:
+  #     name: grafana
+  #     state: present
+  #     disablerepo:
+  #       - ngrok
+
+  # - name: Enable and start Grafana
+  #   systemd:
+  #     name: grafana-server
+  #     state: started
+  #     enabled: yes
+
+## verify services status
+
+  - name: Gather service facts
+    service_facts:
+    
+  - name: Verify Prometheus service is running
+    assert:
+      that:
+        - ansible_facts.services['prometheus.service'].state == 'running'
+        - ansible_facts.services['prometheus.service'].status == 'enabled'
+      fail_msg: "Prometheus service is not running or not enabled."
+      success_msg: "Prometheus is installed, enabled, and running."
+
+  - name: Verify Grafana service is running
+    assert:
+      that:
+        - ansible_facts.services['grafana-server.service'].state == 'running'
+        - ansible_facts.services['grafana-server.service'].status == 'enabled'
+      fail_msg: "Grafana service is not running or not enabled."
+      success_msg: "Grafana is installed, enabled, and running."
+
+  - name: Verify Node Exporter service is running
+    assert:
+      that:
+        - ansible_facts.services['node_exporter.service'].state == 'running'
+        - ansible_facts.services['node_exporter.service'].status == 'enabled'
+      fail_msg: "Node Exporter service is not running or not enabled."
+      success_msg: "Node Exporter is installed, enabled, and running."
+
+  - name: Monitoring Stack Installation Summary
+    debug:
+      msg:
+        - "========================================="
+        - " Monitoring Stack Installed Successfully "
+        - "========================================="
+        - "✓ Prometheus : Running"
+        - "✓ Grafana    : Running"
+        - "✓ Node Exporter : Running"
+        - ""
+        - "Prometheus URL : http://{{ inventory_hostname }}:9090"
+        - "Grafana URL    : http://{{ inventory_hostname }}:3000"
+        - "Node Exporter  : http://{{ inventory_hostname }}:9100/metrics"
+
+  # - name: Read dashboard JSON
+  #   set_fact:
+  #     dashboard_json: "{{ lookup('file', dashboard_file) | from_json }}"
+
+  # - name: Import dashboard into Grafana
+  #   uri:
+  #     url: "{{ grafana_url }}/api/dashboards/db"
+  #     method: POST
+  #     user: "{{ grafana_user }}"
+  #     password: "{{ grafana_password }}"
+  #     force_basic_auth: yes
+  #     body_format: json
+  #     body:
+  #       dashboard: "{{ dashboard_json }}"
+  #       overwrite: "{{ overwrite }}"
+  #       folderId: "{{ folder_id }}"
+  #     status_code: 200

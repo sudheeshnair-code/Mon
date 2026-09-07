@@ -1,0 +1,248 @@
+---
+- name: Uninstall Prometheus, Grafana and Node Exporter
+  hosts: test_server
+  become: yes
+  gather_facts: yes
+
+  tasks:
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+  
+    - name: Show Ansible connection information
+      ansible.builtin.debug:
+        msg:
+          - "inventory_hostname={{ inventory_hostname }}"
+          - "ansible_host={{ ansible_host }}"
+          - "ansible_user={{ ansible_user | default('not defined') }}"
+          - "ansible_connection={{ ansible_connection | default('ssh') }}"
+
+    - name: Check hostname from AAP
+      ansible.builtin.command:
+        cmd: hostname -f
+      register: hostname_result
+      changed_when: false
+    
+    - name: Check PID 1 from AAP
+      ansible.builtin.command:
+        cmd: ps -p 1 -o pid,ppid,comm,args
+      register: pid1_result
+      changed_when: false
+    
+    - name: Check systemd executable
+      ansible.builtin.command:
+        cmd: systemctl --version
+      register: systemd_version
+      changed_when: false
+
+    - name: Check systemd state
+      ansible.builtin.command:
+        cmd: systemctl is-system-running
+      register: systemd_state
+      changed_when: false
+      failed_when: false
+    
+    - name: Check DBus socket
+      ansible.builtin.shell:
+        cmd: ls -l /run/dbus/system_bus_socket
+      register: dbus_socket
+      changed_when: false
+      failed_when: false
+
+    - name: Show diagnostics
+      ansible.builtin.debug:
+        msg:
+          - "Hostname: {{ hostname_result.stdout }}"
+          - "PID 1: {{ pid1_result.stdout }}"
+          - "Systemd version: {{ systemd_version.stdout }}"
+          - "Systemd state: {{ systemd_state.stdout }}"
+          - "DBus socket: {{ dbus_socket.stdout }}"
+    ###############################################################
+    # Verify systemd
+    ###############################################################
+
+    - name: Verify systemd can communicate with system bus
+      ansible.builtin.command:
+        cmd: systemctl show --property=Version
+      register: systemd_check
+      changed_when: false
+
+    ###############################################################
+    # Stop Services
+    ###############################################################
+
+    - name: Stop Prometheus
+      ansible.builtin.systemd_service:
+        name: prometheus.service
+        state: stopped
+      when: "'prometheus.service' in ansible_facts.services"
+
+    - name: Stop Node Exporters
+      ansible.builtin.systemd_service:
+        name: node_exporter.service
+        state: stopped
+      when: "'node_exporter.service' in ansible_facts.services"
+
+    - name: Stop Grafana
+      ansible.builtin.systemd_service:
+        name: grafana-server.service
+        state: stopped
+      when: "'grafana-server.service' in ansible_facts.services"
+
+    ###############################################################
+    # Disable Services
+    ###############################################################
+
+    - name: Disable Prometheus
+      ansible.builtin.systemd_service:
+        name: prometheus.service
+        enabled: false
+      when: "'prometheus.service' in ansible_facts.services"
+
+    - name: Disable Node Exporter
+      ansible.builtin.systemd_service:
+        name: node_exporter.service
+        enabled: false
+      when: "'node_exporter.service' in ansible_facts.services"
+
+    - name: Disable Grafana
+      ansible.builtin.systemd_service:
+        name: grafana-server.service
+        enabled: false
+      when: "'grafana-server.service' in ansible_facts.services"
+
+    ###############################################################
+    # Remove systemd service files
+    ###############################################################
+
+    - name: Remove Prometheus service
+      ansible.builtin.file:
+        path: /etc/systemd/system/prometheus.service
+        state: absent
+
+    - name: Remove Node Exporter service
+      ansible.builtin.file:
+        path: /etc/systemd/system/node_exporter.service
+        state: absent
+
+    - name: Remove Grafana service
+      ansible.builtin.file:
+        path: /etc/systemd/system/grafana-server.service
+        state: absent
+
+    ###############################################################
+    # Remove Grafana package
+    ###############################################################
+
+    - name: Remove Grafana
+      yum:
+        name: grafana
+        state: absent
+
+    ###############################################################
+    # Remove Grafana repository
+    ###############################################################
+
+    - name: Remove Grafana repository
+      ansible.builtin.file:
+        path: /etc/yum.repos.d/grafana.repo
+        state: absent
+
+    ###############################################################
+    # Remove Grafana data/configuration
+    ###############################################################
+
+    - name: Remove Grafana directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/grafana
+        - /var/lib/grafana
+        - /var/log/grafana
+
+    ###############################################################
+    # Remove Prometheus
+    ###############################################################
+
+    - name: Remove Prometheus directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /opt/prometheus
+        - /var/lib/prometheus
+
+    ###############################################################
+    # Remove Node Exporter
+    ###############################################################
+
+    - name: Remove Node Exporter directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /opt/node_exporter-1.8.2.linux-amd64
+
+    ###############################################################
+    # Remove downloaded archives
+    ###############################################################
+
+    - name: Remove downloaded archives
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/prometheus.tar.gz
+        - /tmp/node_exporter.tar.gz
+
+    ###############################################################
+    # Remove users
+    ###############################################################
+
+    - name: Remove Prometheus user
+      ansible.builtin.user:
+        name: prometheus
+        state: absent
+        remove: true
+
+    - name: Remove Node Exporter user
+      ansible.builtin.user:
+        name: node_exporter
+        state: absent
+        remove: true
+
+    ###############################################################
+    # Reload systemd
+    ###############################################################
+
+    - name: Reload systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+    ###############################################################
+    # Verify processes
+    ###############################################################
+
+    - name: Check monitoring processes
+      ansible.builtin.shell:
+        cmd: |
+          ps -ef | grep -E '[p]rometheus|[g]rafana|[n]ode_exporter' || true
+      register: monitoring_processes
+      changed_when: false
+
+    - name: Display remaining processes
+      ansible.builtin.debug:
+        var: monitoring_processes.stdout_lines
+
+    ###############################################################
+    # Verify service definitions
+    ###############################################################
+
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+
+    - name: Verify services
+      ansible.builtin.debug:
+        msg:
+          - "Prometheus: {{ 'Removed' if 'prometheus.service' not in ansible_facts.services else 'Still Present' }}"
+          - "Node Exporter: {{ 'Removed' if 'node_exporter.service' not in ansible_facts.services else 'Still Present' }}"
+          - "Grafana: {{ 'Removed' if 'grafana-server.service' not in ansible_facts.services else 'Still Present' }}"

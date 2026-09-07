@@ -1,0 +1,211 @@
+---
+- name: Deprovision Node Exporter
+  hosts: 192.168.1.156
+  become: true
+  gather_facts: true
+
+  vars:
+    node_exporter_version: "1.8.2"
+
+  tasks:
+
+    ###############################################################
+    # Verify systemd
+    ###############################################################
+
+    - name: Check whether systemd is available
+      ansible.builtin.command:
+        cmd: systemctl show --property=Version
+      register: systemd_check
+      changed_when: false
+      failed_when: false
+
+    - name: Stop deprovision if systemd is unavailable
+      ansible.builtin.fail:
+        msg: >-
+          systemd is not available on {{ inventory_hostname }}.
+          Node Exporter will NOT be removed because it may still be running.
+      when: systemd_check.rc != 0
+
+    ###############################################################
+    # Gather service facts
+    ###############################################################
+
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+
+    ###############################################################
+    # Check Node Exporter service
+    ###############################################################
+
+    - name: Check whether Node Exporter service exists
+      ansible.builtin.set_fact:
+        node_exporter_service_exists: >-
+          {{ 'node_exporter.service' in ansible_facts.services }}
+
+    - name: Display Node Exporter service status
+      ansible.builtin.debug:
+        msg: >-
+          Node Exporter service exists:
+          {{ node_exporter_service_exists }}
+
+    ###############################################################
+    # Stop Node Exporter
+    ###############################################################
+
+    - name: Stop Node Exporter
+      ansible.builtin.systemd_service:
+        name: node_exporter.service
+        state: stopped
+      when: node_exporter_service_exists
+
+    ###############################################################
+    # Disable Node Exporter
+    ###############################################################
+
+    - name: Disable Node Exporter
+      ansible.builtin.systemd_service:
+        name: node_exporter.service
+        enabled: false
+      when: node_exporter_service_exists
+
+    ###############################################################
+    # Remove systemd service
+    ###############################################################
+
+    - name: Remove Node Exporter systemd service
+      ansible.builtin.file:
+        path: /etc/systemd/system/node_exporter.service
+        state: absent
+
+    ###############################################################
+    # Reload systemd
+    ###############################################################
+
+    - name: Reload systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    ###############################################################
+    # Verify Node Exporter process stopped
+    ###############################################################
+
+    - name: Check Node Exporter process
+      ansible.builtin.shell:
+        cmd: pgrep -a node_exporter
+      register: node_exporter_process
+      changed_when: false
+      failed_when: false
+
+    - name: Stop cleanup if Node Exporter is still running
+      ansible.builtin.fail:
+        msg: >-
+          Node Exporter process is still running after stopping the
+          systemd service.
+
+          Process information:
+          {{ node_exporter_process.stdout }}
+      when: node_exporter_process.rc == 0
+
+    ###############################################################
+    # Remove Node Exporter installation
+    ###############################################################
+
+    - name: Remove Node Exporter installation
+      ansible.builtin.file:
+        path: "/opt/node_exporter-{{ node_exporter_version }}.linux-amd64"
+        state: absent
+
+    ###############################################################
+    # Remove temporary archive
+    ###############################################################
+
+    - name: Remove Node Exporter archive
+      ansible.builtin.file:
+        path: /tmp/node_exporter.tar.gz
+        state: absent
+
+    ###############################################################
+    # Remove Node Exporter user
+    ###############################################################
+
+    - name: Check whether Node Exporter user exists
+      ansible.builtin.getent:
+        database: passwd
+        key: node_exporter
+      register: node_exporter_user
+      failed_when: false
+
+    - name: Remove Node Exporter user
+      ansible.builtin.user:
+        name: node_exporter
+        state: absent
+        remove: true
+      when: node_exporter_user.ansible_facts.getent_passwd is defined
+
+    ###############################################################
+    # Final systemd reload
+    ###############################################################
+
+    - name: Final systemd daemon reload
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    ###############################################################
+    # Final service verification
+    ###############################################################
+
+    - name: Gather service facts after removal
+      ansible.builtin.service_facts:
+
+    - name: Verify Node Exporter service is removed
+      ansible.builtin.assert:
+        that:
+          - "'node_exporter.service' not in ansible_facts.services"
+        fail_msg: "Node Exporter service is still registered with systemd."
+        success_msg: "Node Exporter systemd service has been removed."
+
+    ###############################################################
+    # Verify installation files
+    ###############################################################
+
+    - name: Check Node Exporter paths
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "/opt/node_exporter-{{ node_exporter_version }}.linux-amd64"
+        - /etc/systemd/system/node_exporter.service
+        - /tmp/node_exporter.tar.gz
+      register: node_exporter_paths
+
+    - name: Display Node Exporter path verification
+      ansible.builtin.debug:
+        msg: "{{ item.item }} exists={{ item.stat.exists }}"
+      loop: "{{ node_exporter_paths.results }}"
+
+    ###############################################################
+    # Final process verification
+    ###############################################################
+
+    - name: Final Node Exporter process check
+      ansible.builtin.shell:
+        cmd: pgrep -a node_exporter
+      register: final_node_exporter_process
+      changed_when: false
+      failed_when: false
+
+    ###############################################################
+    # Summary
+    ###############################################################
+
+    - name: Node Exporter deprovision summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - " Node Exporter Deprovision Successful"
+          - "=========================================="
+          - "Service removed : node_exporter.service"
+          - "Installation removed : /opt/node_exporter-{{ node_exporter_version }}.linux-amd64"
+          - "Archive removed : /tmp/node_exporter.tar.gz"
+          - "User removed : node_exporter"
+          - "Process running : {{ 'YES' if final_node_exporter_process.rc == 0 else 'NO' }}"

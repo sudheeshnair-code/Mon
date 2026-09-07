@@ -1,0 +1,164 @@
+---
+- name: Install and Configure Node Exporter
+  hosts: test_server
+  # become: true
+  gather_facts: true
+
+  vars:
+    node_exporter_version: "1.8.2"
+
+  tasks:
+
+    ###############################################################
+    # Verify systemd
+    ###############################################################
+
+    - name: Verify systemd is available
+      ansible.builtin.command:
+        cmd: systemctl show --property=Version
+      changed_when: false
+
+    ###############################################################
+    # Install required packages
+    ###############################################################
+
+    - name: Install required packages
+      ansible.builtin.dnf:
+        name:
+          - wget
+          - curl
+        state: present
+        enablerepo:
+          - baseos
+          - appstream
+        disablerepo:
+          - "*"
+
+    ###############################################################
+    # Create Node Exporter user
+    ###############################################################
+
+    - name: Create Node Exporter user
+      ansible.builtin.user:
+        name: node_exporter
+        shell: /sbin/nologin
+        create_home: false
+
+    ###############################################################
+    # Download Node Exporter
+    ###############################################################
+
+    # - name: Download Node Exporter
+    #   ansible.builtin.get_url:
+    #     url: "https://github.com/prometheus/node_exporter/releases/download/v{{ node_exporter_version }}/node_exporter-{{ node_exporter_version }}.linux-amd64.tar.gz"
+    #     dest: /tmp/node_exporter.tar.gz
+    #     mode: "0644"
+    - name: Copy node exporter archive to destination
+      ansible.builtin.copy:
+        src: /runner/artifacts/monitoring/node_exporter.tar.gz
+        dest: /tmp/
+        mode: "0644"
+
+    ###############################################################
+    # Extract Node Exporter
+    ###############################################################
+
+    - name: Extract Node Exporter
+      ansible.builtin.unarchive:
+        src: /tmp/node_exporter.tar.gz
+        dest: /opt/
+        remote_src: true
+
+    ###############################################################
+    # Set ownership
+    ###############################################################
+
+    - name: Set Node Exporter ownership
+      ansible.builtin.file:
+        path: "/opt/node_exporter-{{ node_exporter_version }}.linux-amd64"
+        owner: node_exporter
+        group: node_exporter
+        recurse: true
+
+    ###############################################################
+    # Create systemd service
+    ###############################################################
+
+    - name: Create Node Exporter systemd service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/node_exporter.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Prometheus Node Exporter
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=node_exporter
+          Group=node_exporter
+          ExecStart=/opt/node_exporter-{{ node_exporter_version }}.linux-amd64/node_exporter
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+
+    ###############################################################
+    # Reload systemd
+    ###############################################################
+
+    - name: Reload systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    ###############################################################
+    # Enable and start Node Exporter
+    ###############################################################
+
+    - name: Enable and start Node Exporter
+      ansible.builtin.systemd_service:
+        name: node_exporter.service
+        enabled: true
+        state: started
+
+    ###############################################################
+    # Remove archive
+    ###############################################################
+
+    # - name: Remove Node Exporter archive
+    #   ansible.builtin.file:
+    #     path: /tmp/node_exporter.tar.gz
+    #     state: absent
+
+    ###############################################################
+    # Verify
+    ###############################################################
+
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+
+    - name: Verify Node Exporter
+      ansible.builtin.assert:
+        that:
+          - "'node_exporter.service' in ansible_facts.services"
+          - ansible_facts.services['node_exporter.service'].state == 'running'
+          - ansible_facts.services['node_exporter.service'].status == 'enabled'
+        fail_msg: "Node Exporter is not running or enabled."
+        success_msg: "Node Exporter is installed, enabled and running."
+
+    ###############################################################
+    # Summary
+    ###############################################################
+
+    - name: Node Exporter installation summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - " Node Exporter Installation Successful"
+          - "=========================================="
+          - "Version : {{ node_exporter_version }}"
+          - "Service : node_exporter.service"
+          - "Port    : 9100"
+          - "Status  : Running"

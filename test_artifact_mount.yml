@@ -1,0 +1,17 @@
+---
+- name: Test AAP artifact mount
+  hosts: test_server
+  gather_facts: false
+
+  tasks:
+
+    - name: Check mounted monitoring directory
+      ansible.builtin.command:
+        cmd: ls -lh /runner/artifacts/monitoring/
+      delegate_to: localhost
+      register: artifact_files
+      changed_when: false
+
+    - name: Display artifacts
+      ansible.builtin.debug:
+        var: artifact_files.stdout_lines

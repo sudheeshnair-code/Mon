@@ -1,0 +1,6 @@
+---
+- name: Test yaml
+- hosts: localhost
+- tasks:
+    - name: Gather fact
+      set:

@@ -1,0 +1,224 @@
+---
+- name: Deprovision Prometheus
+  hosts: 192.168.1.156
+  become: true
+  gather_facts: true
+  vars:
+    prometheus_version: "2.55.0"
+
+  tasks:
+
+    ###############################################################
+    # Verify systemd
+    ###############################################################
+
+    - name: Check whether systemd is available
+      ansible.builtin.command:
+        cmd: systemctl show --property=Version
+      register: systemd_check
+      changed_when: false
+      failed_when: false
+
+    - name: Stop if systemd is not available
+      ansible.builtin.fail:
+        msg: >-
+          systemd is not available on {{ inventory_hostname }}.
+          Prometheus will NOT be removed because it may still be running.
+      when: systemd_check.rc != 0
+
+    ###############################################################
+    # Gather service facts
+    ###############################################################
+
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+
+    ###############################################################
+    # Check Prometheus service
+    ###############################################################
+
+    - name: Check whether Prometheus service exists
+      ansible.builtin.set_fact:
+        prometheus_service_exists: >-
+          {{ 'prometheus.service' in ansible_facts.services }}
+
+    - name: Display Prometheus service status
+      ansible.builtin.debug:
+        msg: >-
+          Prometheus service exists:
+          {{ prometheus_service_exists }}
+
+    ###############################################################
+    # Stop Prometheus
+    ###############################################################
+
+    - name: Stop Prometheus
+      ansible.builtin.systemd_service:
+        name: prometheus.service
+        state: stopped
+      when: prometheus_service_exists
+
+    ###############################################################
+    # Disable Prometheus
+    ###############################################################
+
+    - name: Disable Prometheus
+      ansible.builtin.systemd_service:
+        name: prometheus.service
+        enabled: false
+      when: prometheus_service_exists
+
+    ###############################################################
+    # Remove systemd service
+    ###############################################################
+
+    - name: Remove Prometheus systemd service
+      ansible.builtin.file:
+        path: /etc/systemd/system/prometheus.service
+        state: absent
+
+    ###############################################################
+    # Reload systemd
+    ###############################################################
+
+    - name: Reload systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    ###############################################################
+    # Verify Prometheus process has stopped
+    ###############################################################
+
+    - name: Check Prometheus process
+      ansible.builtin.shell:
+        cmd: pgrep -a prometheus
+      register: prometheus_process
+      changed_when: false
+      failed_when: false
+
+    - name: Stop if Prometheus process is still running
+      ansible.builtin.fail:
+        msg: >-
+          Prometheus process is still running after stopping the systemd
+          service. Process information:
+          {{ prometheus_process.stdout }}
+      when: prometheus_process.rc == 0
+
+    ###############################################################
+    # Remove Prometheus symlink
+    ###############################################################
+
+    - name: Remove Prometheus symlink
+      ansible.builtin.file:
+        path: /opt/prometheus
+        state: absent
+
+    ###############################################################
+    # Remove Prometheus installation
+    ###############################################################
+
+    - name: Remove Prometheus installation directory
+      ansible.builtin.file:
+        path: "/opt/prometheus-{{ prometheus_version }}.linux-amd64"
+        state: absent
+
+    ###############################################################
+    # Remove Prometheus data
+    ###############################################################
+
+    - name: Remove Prometheus data directory
+      ansible.builtin.file:
+        path: /var/lib/prometheus
+        state: absent
+
+    ###############################################################
+    # Remove temporary archive
+    ###############################################################
+
+    - name: Remove Prometheus temporary archive
+      ansible.builtin.file:
+        path: /tmp/prometheus.tar.gz
+        state: absent
+
+    ###############################################################
+    # Remove Prometheus user
+    ###############################################################
+
+    - name: Check whether Prometheus user exists
+      ansible.builtin.getent:
+        database: passwd
+        key: prometheus
+      register: prometheus_user
+      failed_when: false
+
+    - name: Remove Prometheus user
+      ansible.builtin.user:
+        name: prometheus
+        state: absent
+        remove: true
+      when: prometheus_user.ansible_facts.getent_passwd is defined
+
+    ###############################################################
+    # Final systemd reload
+    ###############################################################
+
+    - name: Reload systemd after cleanup
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    ###############################################################
+    # Final verification
+    ###############################################################
+
+    - name: Gather service facts after removal
+      ansible.builtin.service_facts:
+
+    - name: Verify Prometheus service is removed
+      ansible.builtin.assert:
+        that:
+          - "'prometheus.service' not in ansible_facts.services"
+        fail_msg: "Prometheus service is still registered with systemd."
+        success_msg: "Prometheus systemd service has been removed."
+
+    ###############################################################
+    # Verify installation files
+    ###############################################################
+
+    - name: Check Prometheus installation paths
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /opt/prometheus
+        - "/opt/prometheus-{{ prometheus_version }}.linux-amd64"
+        - /var/lib/prometheus
+        - /etc/systemd/system/prometheus.service
+      register: prometheus_paths
+
+    - name: Display Prometheus path verification
+      ansible.builtin.debug:
+        msg: "{{ item.item }} exists={{ item.stat.exists }}"
+      loop: "{{ prometheus_paths.results }}"
+
+    ###############################################################
+    # Final process verification
+    ###############################################################
+
+    - name: Verify Prometheus process is absent
+      ansible.builtin.shell:
+        cmd: pgrep -a prometheus
+      register: final_prometheus_process
+      changed_when: false
+      failed_when: false
+
+    - name: Prometheus deprovision summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - " Prometheus Deprovision Successful"
+          - "=========================================="
+          - "Service removed : prometheus.service"
+          - "Installation removed : /opt/prometheus-{{ prometheus_version }}.linux-amd64"
+          - "Symlink removed : /opt/prometheus"
+          - "Data removed : /var/lib/prometheus"
+          - "User removed : prometheus"
+          - "Process running : {{ 'YES' if final_prometheus_process.rc == 0 else 'NO' }}"
