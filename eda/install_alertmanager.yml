@@ -1,0 +1,107 @@
+---
+- name: Install and Configure Prometheus & Grafana
+  hosts: test_server
+  gather_facts: no
+  become: yes
+
+  vars:
+    alertmanager_version: "0.28.1"
+
+  tasks:
+    
+
+###############################################################
+# Create Alertmanager User
+###############################################################
+
+  - name: Create Alertmanager user
+    user:
+      name: alertmanager
+      shell: /sbin/nologin
+      create_home: no
+###############################################################
+# Download Alertmanager
+###############################################################
+  - name: Download Alertmanager
+    get_url:
+      url: "https://github.com/prometheus/alertmanager/releases/download/v{{ alertmanager_version }}/alertmanager-{{ alertmanager_version }}.linux-amd64.tar.gz"
+      dest: /tmp/alertmanager.tar.gz
+
+  - name: Extract Alertmanager
+    unarchive:
+      src: /tmp/alertmanager.tar.gz
+      dest: /opt
+      remote_src: yes
+
+  - name: Create Alertmanager symlink
+    file:
+      src: "/opt/alertmanager-{{ alertmanager_version }}.linux-amd64"
+      dest: /opt/alertmanager
+      state: link
+
+  - name: Create Alertmanager data directory
+    file:
+      path: /var/lib/alertmanager
+      state: directory
+      owner: alertmanager
+      group: alertmanager
+      mode: '0755'
+
+  - name: Copy Alertmanager configuration
+    template:
+      src: alertmanager.yml.j2
+      dest: /opt/alertmanager/alertmanager.yml
+      owner: alertmanager
+      group: alertmanager
+
+  - name: Set Alertmanager ownership
+    file:
+      path: /opt/alertmanager
+      owner: alertmanager
+      group: alertmanager
+      recurse: yes
+
+  - name: Create Alertmanager service
+    copy:
+      dest: /etc/systemd/system/alertmanager.service
+      content: |
+        [Unit]
+        Description=Prometheus Alertmanager
+        After=network.target
+  
+        [Service]
+        User=alertmanager
+        Group=alertmanager
+        Type=simple
+  
+        ExecStart=/opt/alertmanager/alertmanager \
+          --config.file=/opt/alertmanager/alertmanager.yml \
+          --storage.path=/var/lib/alertmanager
+  
+        Restart=always
+  
+        [Install]
+        WantedBy=multi-user.target
+
+  - name: Reload systemd
+    systemd:
+      daemon_reload: yes
+
+  - name: Enable Alertmanager
+    systemd:
+      name: alertmanager
+      enabled: yes
+      state: started
+
+  - name: Gather service facts
+    service_facts:
+
+  - name: Verify Alertmanager
+    assert:
+      that:
+        - ansible_facts.services['alertmanager.service'].state == 'running'
+        - ansible_facts.services['alertmanager.service'].status == 'enabled'
+      success_msg: "Alertmanager is running."
+      fail_msg: "Alertmanager failed."
+
+# Test http://<server>:9093
